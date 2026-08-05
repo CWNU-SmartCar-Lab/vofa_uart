@@ -12,38 +12,27 @@
 
 float uint8Array2Float(const uint8_t* u8Array)
 {
-	float   fdata = 0;
-	uint8_t Data[4];
+	float fdata = 0;
 #if USE_BIG_ENDIAN == 1
-		Data[3] = u8Array[0];
-		Data[2] = u8Array[1];
-		Data[1] = u8Array[2];
-		Data[0] = u8Array[3];
-#endif
-#if USE_LITTLE_ENDIAN == 1
-		Data[0] = u8Array[0];
-		Data[1] = u8Array[1];
-		Data[2] = u8Array[2];
-		Data[3] = u8Array[3];
-#endif
+	const uint8_t Data[4] = {u8Array[3], u8Array[2], u8Array[1], u8Array[0]};
 	memcpy(&fdata, Data, 4);
+#else
+	/* 小端平台直接拷贝，避免严格别名问题 */
+	memcpy(&fdata, u8Array, 4);
+#endif
 	return fdata;
 }
 
 void float2uint8Array(uint8_t* u8Array, const float* fdata)
 {
-	uint8_t floatArray[4];
-	*(float*)floatArray = *fdata;
 #if USE_BIG_ENDIAN == 1
-		u8Array[3] = floatArray[0];
-		u8Array[2] = floatArray[1];
-		u8Array[1] = floatArray[2];
-		u8Array[0] = floatArray[3];
-#endif
-#if USE_LITTLE_ENDIAN == 1
-		u8Array[0] = floatArray[0];
-		u8Array[1] = floatArray[1];
-		u8Array[2] = floatArray[2];
-		u8Array[3] = floatArray[3];
+	uint8_t floatArray[4];
+	memcpy(floatArray, fdata, 4);
+	u8Array[3] = floatArray[0];
+	u8Array[2] = floatArray[1];
+	u8Array[1] = floatArray[2];
+	u8Array[0] = floatArray[3];
+#else
+	memcpy(u8Array, fdata, 4);
 #endif
 }
