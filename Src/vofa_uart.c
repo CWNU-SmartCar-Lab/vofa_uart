@@ -1,21 +1,16 @@
 #include "vofa_uart.h"
-#include "vofa_function.h"
-#include "usart.h"
+#include "usart.h" // STM32 HAL 示例；若不用 HAL，在自己的文件中覆盖下面两个函数即可
 
-uint8_t            vofaRxBufferIndex = 0;
-extern vofaCommand cmd;
-
-void uartSendByte(const uint8_t c)
+/**
+ * @brief 默认发送实现：STM32 HAL 阻塞式整帧发送
+ * @note  弱符号。追求性能时建议覆盖为 HAL_UART_Transmit_DMA / 中断发送
+ */
+VOFA_WEAK void uartSendData(const uint8_t* data, uint32_t len)
 {
-	HAL_UART_Transmit(&huart1, (uint8_t*)&c, 1, HAL_MAX_DELAY); //修改为串口发送接口
+	HAL_UART_Transmit(&huart1, (uint8_t*)data, (uint16_t)len, HAL_MAX_DELAY);
 }
 
-void uartSendData(uint8_t* Array, uint8_t SIZE)
+VOFA_WEAK void uartSendByte(uint8_t c)
 {
-	while (SIZE)
-	{
-		uartSendByte(*Array);
-		Array++;
-		SIZE--;
-	}
+	uartSendData(&c, 1U);
 }
