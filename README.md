@@ -3,20 +3,21 @@
 > 写在前面: 作者是将两年前的代码修补了一下并开源出来，如果有问题可以issue，移植教程还是比较详细，仔细阅读下列教程基本上没什么问题。
 
 ---
+
 - [使用方法](#使用方法)
 	- [一、对外接口](#一对外接口)
-		- [1.1 服务函数接口](#11-服务函数接口)
-		- [1.2 命令解析服务相关接口](#12-命令解析服务相关接口)
 	- [二、移植接口](#二移植接口)
 	- [三、简单的使用样例](#三简单的使用样例)
 		- [3.1 串口中断加入接收函数](#31-串口中断加入接收函数)
-		- [3.2 定时判断接收标志位](#32-定时判断接收标志位)
+		- [3.2 主循环判断接收标志位](#32-主循环判断接收标志位)
 	- [四、如何定制自己的命令帧？](#四如何定制自己的命令帧)
 	- [五、数据大小端的切换](#五数据大小端的切换)
-	- [六、VOFA命令的配置](#六vofa命令的配置)
-		- [5.1 新建命令](#51-新建命令)
-		- [5.2 根据你的命令帧编辑命令](#52-根据你的命令帧编辑命令)
-		- [5.3 将命令绑定到控件](#53-将命令绑定到控件)
+	- [六、性能建议](#六性能建议)
+	- [七、VOFA命令的配置](#七vofa命令的配置)
+		- [7.1 新建命令](#71-新建命令)
+		- [7.2 根据你的命令帧编辑命令](#72-根据你的命令帧编辑命令)
+		- [7.3 将命令绑定到控件](#73-将命令绑定到控件)
+	- [八、旧版本迁移说明](#八旧版本迁移说明)
 
 ---
 
@@ -30,182 +31,65 @@
 
 ## 一、对外接口
 
-- **./inc/vofa_functions**
+- **./Inc/vofa_function.h**
 
 ```C
-void vofaSendJustFloat(vofaJustFloatFrame *vofaJFFrame);			//以JustFloat协议发送数据
-void vofaSendFirewater(const float *fdata, const uint32_t ulSize);	//以Firewater协议发送数据
-void vofaSendRawdata(uint8_t *pData, const uint32_t ulSize);		//以rawdata协议发送数据
+void vofaInit(void);											//库初始化
 
-void vofaJustFloatInit(void);										//Justfloat协议初始化
-void uartCMDRecv(uint8_t byte_data);								//uart串口接收单字节并存入vofaCommandData数据包
-void vofaCommandParse(void);										//解析命令
+void vofaSendJustFloat(const float *fdata, uint8_t chCount);	//以JustFloat协议发送数据（1~CH_COUNT个通道）
+void vofaSendFirewater(const float *fdata, uint32_t ulSize);	//以Firewater协议发送数据
+void vofaSendRawdata(const uint8_t *pData, uint32_t ulSize);	//以rawdata协议发送数据
 
-extern vofaJustFloatFrame JustFloat_Data;							//包含接收到的浮点数据的结构体
-extern vofaCommand vofaCommandData;									//包含命令的结构体
+void uartCMDRecv(uint8_t byte_data);							//uart串口接收单字节并存入vofaCommandData数据包
+vofaParseResult vofaCommandParse(void);							//解析命令，返回解析结果
 
+extern volatile vofaCommand vofaCommandData;					//包含命令的结构体
 ```
 
-### 1.1 服务函数接口
-
-以下接口用于三种协议的数据发送
+发送接口示例：
 
 ```C
-/**
-* @param vofaJFFframe: 包含数据帧的结构体
-* @return void
-*/
-void vofaSendJustFloat(vofaJustFloatFrame *vofaJFFrame)
-{
-	uint8_t i;
-	uint8_t u8Array[4];
-	for (i = 0; i < CH_COUNT; i++)
-	{
-		float2uint8Array(u8Array, vofaJFFrame->fdata[i], 0);
-		uartSendData(vofaJFFrame->u8Array, sizeof(u8Array));
-	}
-	uartSendData(vofaJFFrame->frametail, FRAME_TAIL_SIZE);
-}
+float chData[2] = {1.0f, -2.5f};
 
-/**
-* @param fdata: 指向要发送的浮点数据的指针
-* @param ulSize： 要发送的数据个数
-* @return void
-*/
-void vofaSendFirewater(const float *fdata, const uint32_t ulSize)
-{
-	uint32_t i;
-	for (i = 0; i < ulSize - 1; i++)
-	{
-		printf("%.6f,", *(fdata + i));
-	}
-	printf("%.6f\n", *(fdata + i));
-}
-
-/**
-* @param pData: 指向要发送的单字节数据的指针
-* @param ulSize： 要发送的数据个数
-* @return void
-*/
-void vofaSendRawdata(uint8_t *pData, const uint32_t ulSize)
-{
-	uint32_t i;
-	for (i = 0; i < ulSize; i++)
-	{
-		uartSendByte(*(Data + i));
-	}
-}
+vofaSendJustFloat(chData, 2);	//2个通道
+vofaSendFirewater(chData, 2);
 ```
 
-### 1.2 命令解析服务相关接口
-
-以下接口用于接收到的命令帧处理
+`vofaCommandParse` 的返回值用于区分解析结果：
 
 ```C
-/**
-* @breif 初始化JustFloat帧结构体
-*/
-void vofaJustFloatInit(void)
+typedef enum
 {
-	vofaCommandData.cmdID                   = INVALID;
-	vofaCommandData.cmdType                 = INVALID;
-	vofaCommandData.completionFlag          = 0;
-	JustFloat_Data.frametail[0] = 0x00;
-	JustFloat_Data.frametail[1] = 0x00;
-	JustFloat_Data.frametail[2] = 0x80;
-	JustFloat_Data.frametail[3] = 0x7f;
-}
-
-/**
-* @breif 将串口收到的数据判断并存入数据包中，并比对帧控制接收完成标志位置位
-* @param byte_data： 串口接收到的字节数据 
-*/
-void uartCMDRecv(uint8_t byte_data) //此函数放在串口中断中
-{
-	vofaCommandData.uartRxPacket[vofaRxBufferIndex] = byte_data;
-
-	if (vofaCommandData.uartRxPacket[vofaRxBufferIndex - 1] == '!' && vofaCommandData.uartRxPacket[vofaRxBufferIndex] == '#')
-	{
-		vofaCommandData.completionFlag = 1;
-		vofaRxBufferIndex  = 0;
-	}
-
-	else if (vofaRxBufferIndex > (CMD_FRAME_SIZE - 1))
-	{
-		vofaCommandData.completionFlag = 0;
-		vofaRxBufferIndex  = 0;
-		memset(vofaCommandData.uartRxPacket, 0, 10);
-	}
-
-	else
-	{
-		vofaRxBufferIndex++;
-	}
-}
-
-/**
-*
-*/
-void vofaCommandParse(void)
-{
-	uint8_t* pRxPacket;
-	pRxPacket = vofaCommandData.uartRxPacket;
-
-	if (vofaCommandData.uartRxPacket[0] != '@' || vofaCommandData.uartRxPacket[3] != '=' || vofaCommandData.uartRxPacket[CMD_FRAME_SIZE - 2] != '!' || vofaCommandData.
-		uartRxPacket[CMD_FRAME_SIZE - 1] != '#')
-	{
-		memset(vofaCommandData.uartRxPacket, 0, CMD_FRAME_SIZE);
-		return;
-	}
-
-	switch (vofaCommandData.uartRxPacket[1])
-	{
-		case 'S': vofaCommandData.cmdType = Speed;
-			break;
-		case 'P': vofaCommandData.cmdType = Position;
-			break;
-		default: vofaCommandData.cmdType = INVALID;
-			break;
-	}
-
-	switch (vofaCommandData.uartRxPacket[2])
-	{
-		case '1': vofaCommandData.cmdID = Direct_Assignment;
-			break;
-		case '2': vofaCommandData.cmdID = Increase;
-			break;
-		case '3': vofaCommandData.cmdID = Decrease;
-			break;
-		default: vofaCommandData.cmdID = INVALID;
-			break;
-	}
-	memcpy(vofaCommandData.validData, pRxPacket + 4, 4);
-
-	vofaCommandData.floatData = uint8Array2Float(vofaCommandData.validData, 0);
-
-	pRxPacket = NULL;
-	memset(vofaCommandData.validData, 0, 4);
-	memset(vofaCommandData.uartRxPacket, 0, CMD_FRAME_SIZE);
-}
+	VOFA_PARSE_OK = 0,
+	VOFA_PARSE_BAD_FRAME,	 //帧头/帧尾/格式错误
+	VOFA_PARSE_UNKNOWN_TYPE, //未知命令类型
+	VOFA_PARSE_UNKNOWN_ID	 //未知命令ID
+} vofaParseResult;
 ```
 
 ## 二、移植接口
 
-- **./src/vofa_uart.c**
-
-  在移植时需要将以下串口发送单字节的函数中替换为相应的串口发送单字节的实现
+串口发送函数在 `./Src/vofa_uart.c` 中是**弱符号（weak）**的默认实现，移植时**不需要修改本库任何源码**，直接在你自己的工程里定义同名函数即可覆盖：
 
 ```C
-void uartSendByte(const uint8_t c)
+/* 在你自己的源文件中实现即可，例如基于 DMA 的发送 */
+void uartSendData(const uint8_t *data, uint32_t len)
 {
-	HAL_UART_Transmit(&huart1, (uint8_t*)&c, 1, HAL_MAX_DELAY); //修改为串口发送接口
+	HAL_UART_Transmit_DMA(&huart1, (uint8_t *)data, (uint16_t)len);
 }
 ```
 
-- **./inc/vofa_function.h**
+```C
+void uartSendByte(uint8_t c)
+{
+	uartSendData(&c, 1);
+}
+```
+
+- **./Inc/vofa_function.h**
 
   ```C
-  void uartCMDRecv(uint8_t byte_data);		//将此函数放在串口中断中
+  void uartCMDRecv(uint8_t byte_data);		//将此函数放在串口接收中断中调用
   ```
 
   
@@ -216,81 +100,97 @@ void uartSendByte(const uint8_t c)
 
 ```C
 #include "vofa_function.h"
+#include "usart.h"
 
-uint8_t rx_data = 0;
+static uint8_t rx_data = 0;
 
-void USART1_RxCallBack(UsartTypedef *usart){
-	if (usart->Instance == huart1){
-        uartCMDRecv(rx_data);
-        HAL_UART_Recieve_IT(&huart1, &rx_data, 1);
-    }
+/* 以 STM32 HAL 为例 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	if (huart->Instance == USART1)
+	{
+		uartCMDRecv(rx_data);
+		HAL_UART_Receive_IT(&huart1, &rx_data, 1);
+	}
 }
 ```
 
-### 3.2 定时判断接收标志位
+### 3.2 主循环判断接收标志位
 
-```C## 
+```C
 #include "vofa_function.h"
 
 /*以主函数中的循环加延时检测为例*/
-void main(void){
-    /*
-    *	一些初始化代码
-    */
-    for(;;){
-		if (vofaCommandData.completionFlag == 1)		//收到命令帧
-        	{	
-            		vofaCommandData.completionFlag = 0; 			//清楚标志位
-            		vofaCommandParse();						//解析收到的数据帧
-            		/*
-            		* 根据你的命令做相应处理
-            		* vofaCommandData.cmdID是接收到的命令ID
-            		* vofaCommandData.cmdType是接收到的命令类型
-            		* vofaCommandData.floatData是接收到的浮点数据
-            		*/
-            
-            		//使用举例
-            		switch(vofaCommandData.cmdType) 		//判断收到的命令类型
-            		{
-                		case Speed:
-                    			switch(vofaCommandData.cmdID)	//判断收到的命令ID
-                    			{
-                        			case Direct_Assignment:
-                            			printf("I recv Command Type Speed, ID Direct_Assignment, data: %.6f", vofaCommandData.floatData);
-                            			break;
-                        			case Increse:
-                            			printf("I recv Command Type Speed, ID Increse, data: %.6f", vofaCommandData.floatData);
-                            			break;
-                        			case Decrease:
-                            			printf("I recv Command Type Speed, ID Decrease, data: %.6f", vofaCommandData.floatData);
-                            			break;
-                    			}
-                    		break;
-                		case Postion:
-                    			switch(vofaCommandData.cmdID)	//判断收到的命令ID
-                    			{
-                        			case Direct_Assignment:
-                            			printf("I recv Command Type Postion, ID Direct_Assignment, data: %.6f", vofaCommandData.floatData);
-                            			break;
-                        			case Increse:
-                            			printf("I recv Command Type Postion, ID Increse, data: %.6f", vofaCommandData.floatData);
-                            			break;
-                        			case Decrease:
-                            			printf("I recv Command Type Postion, ID Decrease, data: %.6f", vofaCommandData.floatData);
-                            			break;
-                    			}
-                    		break;
-            		}
-        	}
-        osDelay(50);		//延时50ms
+int main(void)
+{
+	/*
+	*	一些初始化代码
+	*/
+	vofaInit();
+
+	for(;;)
+	{
+		if (vofaCommandData.completionFlag == 1)	//收到命令帧
+		{
+			vofaCommandData.completionFlag = 0;		//清除标志位
+
+			if (vofaCommandParse() == VOFA_PARSE_OK)//解析成功
+			{
+				/*
+				* 根据你的命令做相应处理
+				* vofaCommandData.cmdID是接收到的命令ID
+				* vofaCommandData.cmdType是接收到的命令类型
+				* vofaCommandData.floatData是接收到的浮点数据
+				*/
+
+				//使用举例
+				switch(vofaCommandData.cmdType)		//判断收到的命令类型
+				{
+					case Speed:
+						switch(vofaCommandData.cmdID)	//判断收到的命令ID
+						{
+							case Direct_Assignment:
+								printf("I recv Command Type Speed, ID Direct_Assignment, data: %.6f", vofaCommandData.floatData);
+								break;
+							case Increase:
+								printf("I recv Command Type Speed, ID Increase, data: %.6f", vofaCommandData.floatData);
+								break;
+							case Decrease:
+								printf("I recv Command Type Speed, ID Decrease, data: %.6f", vofaCommandData.floatData);
+								break;
+						}
+						break;
+					case Position:
+						switch(vofaCommandData.cmdID)	//判断收到的命令ID
+						{
+							case Direct_Assignment:
+								printf("I recv Command Type Position, ID Direct_Assignment, data: %.6f", vofaCommandData.floatData);
+								break;
+							case Increase:
+								printf("I recv Command Type Position, ID Increase, data: %.6f", vofaCommandData.floatData);
+								break;
+							case Decrease:
+								printf("I recv Command Type Position, ID Decrease, data: %.6f", vofaCommandData.floatData);
+								break;
+						}
+						break;
+				}
+			}
+		}
+		osDelay(50);	//延时50ms
 	}
 }
-
 ```
+
+> 注意：`vofaCommandData` 在串口中断与主循环间共享，已声明为 `volatile`。
+> 默认流程是先整体拷贝到栈上再解析，常规场景无需额外加锁；
+> 若对实时性要求高，建议改用 DMA + 空闲中断接收（见第六节）。
 
 ## 四、如何定制自己的命令帧？
 
-- **./inc/vofa_function.h**
+命令帧相关的可配置项：
+
+- **./Inc/vofa_function.h**
 
 ```C
 #define CMD_FRAME_SIZE 10			//将此处更改为你需要的命令帧长度
@@ -314,35 +214,40 @@ enum CommandType
 };
 ```
 
-- **./src/vofa_function.c**
+`vofaCommandParse` 是弱符号函数，定制解析逻辑时**不需要修改 `./Src/vofa_function.c`**，
+直接在你自己的工程里定义同名函数即可覆盖默认实现。默认实现如下，可作为自定义的参考模板：
 
 ```C
-void vofaCommandParse(void)
+vofaParseResult vofaCommandParse(void)
 {
-	uint8_t* pRxPacket;
-	pRxPacket = vofaCommandData.uartRxPacket;
+	uint8_t         packet[CMD_FRAME_SIZE];
+	vofaParseResult result = VOFA_PARSE_OK;
 
-    //帧格式判断		此处的命令帧是以@+S/P+1/2/3+=四字节浮点数据+!+#为例
-    //其中@是帧头 S/P对应命令类型 1/2/3对应命令ID !#为帧尾
-	if (vofaCommandData.uartRxPacket[0] != '@' || vofaCommandData.uartRxPacket[3] != '=' || vofaCommandData.uartRxPacket[CMD_FRAME_SIZE - 2] != '!' || vofaCommandData.
-		uartRxPacket[CMD_FRAME_SIZE - 1] != '#')
+	/* 先整体拷到栈上再解析，避免解析过程中被中断改写 */
+	memcpy(packet, (const void *)vofaCommandData.uartRxPacket, CMD_FRAME_SIZE);
+	memset((void *)vofaCommandData.uartRxPacket, 0, CMD_FRAME_SIZE);
+
+	//帧格式判断		默认命令帧以 @+S/P+1/2/3+=+四字节浮点数据+!+# 为例
+	//其中@是帧头 S/P对应命令类型 1/2/3对应命令ID !#为帧尾
+	if (packet[0] != '@' || packet[3] != '=' ||
+		packet[CMD_FRAME_SIZE - 2] != '!' || packet[CMD_FRAME_SIZE - 1] != '#')
 	{
-		memset(vofaCommandData.uartRxPacket, 0, CMD_FRAME_SIZE);
-		return;
+		return VOFA_PARSE_BAD_FRAME;
 	}
 
-    //此处修改字节比对，改为你需要的类型
-	switch (vofaCommandData.uartRxPacket[1])
+	//此处修改字节比对，改为你需要的类型
+	switch (packet[1])
 	{
 		case 'S': vofaCommandData.cmdType = Speed;
 			break;
 		case 'P': vofaCommandData.cmdType = Position;
 			break;
 		default: vofaCommandData.cmdType = INVALID;
+			result = VOFA_PARSE_UNKNOWN_TYPE;
 			break;
 	}
 	//此处修改字节比对，改为你需要的ID
-	switch (vofaCommandData.uartRxPacket[2])
+	switch (packet[2])
 	{
 		case '1': vofaCommandData.cmdID = Direct_Assignment;
 			break;
@@ -351,18 +256,20 @@ void vofaCommandParse(void)
 		case '3': vofaCommandData.cmdID = Decrease;
 			break;
 		default: vofaCommandData.cmdID = INVALID;
+			if (result == VOFA_PARSE_OK)
+			{
+				result = VOFA_PARSE_UNKNOWN_ID;
+			}
 			break;
 	}
-	memcpy(vofaCommandData.validData, pRxPacket + 4, 4);
 
-	vofaCommandData.floatData = uint8Array2Float(vofaCommandData.validData, 0);
-
-	pRxPacket = NULL;
-	memset(vofaCommandData.validData, 0, 4);
-	memset(vofaCommandData.uartRxPacket, 0, CMD_FRAME_SIZE);
+	vofaCommandData.floatData = uint8Array2Float(&packet[4]);
+	return result;
 }
-
 ```
+
+> 注意：`uartCMDRecv` 默认按 `!#` 帧尾判定一帧接收完成，定制帧格式时若帧尾不同，
+> 请同步调整 `uartCMDRecv` 中的帧尾比对。
 
 ## 五、数据大小端的切换
 
@@ -379,7 +286,7 @@ void vofaCommandParse(void)
 //如下架构有配置endian为大端、小端中任一种的功能， ARM, PowerPC, Alpha, SPARC V9, MIPS, PA-RISC 和 IA-64 等等。
 ```
 
-需要在 `base_tranfer.h`中通过宏定义进行配置:
+需要在 `base_transfer.h`中通过宏定义进行配置:
 
 ```C
 #ifndef BASE_TRANSFER_H__
@@ -399,13 +306,23 @@ void float2uint8Array(uint8_t* u8Array, const float* fdata);
 
 样例代码由于是在`STM32`上测试的，是`ARM Cortex`架构，故将`#define USE_LITTLE_ENDIAN`配置为了`1`，以启用小端存储格式解析。
 
-## 六、VOFA命令的配置
+> 小端平台下 JustFloat 发送走的是 `memcpy` 零转换路径，大小端配置只影响大端平台。
 
-### 5.1 新建命令
+## 六、性能建议
+
+- **发送**：`vofaSendJustFloat` / `vofaSendRawdata` 默认已拼好整帧后调用一次 `uartSendData`。
+  默认移植实现是 HAL 阻塞发送，高频发送场景建议把 `uartSendData` 覆盖为 DMA 发送（见第二节），CPU 占用可降到接近零。
+- **Firewater 协议**：`vofaSendFirewater` 依赖浮点 `printf`，在 MCU 上会增加约 10~20KB flash 且耗时较长，仅建议低频调试使用；高频波形请使用 JustFloat。
+- **接收**：默认是每字节中断 + 主循环轮询标志位，命令响应延迟取决于你的轮询周期。
+  对响应速度有要求时，建议改用 UART 空闲中断 + DMA 接收，收到一整帧后再置位解析。
+
+## 七、VOFA命令的配置
+
+### 7.1 新建命令
 
 ![vofa-new_cmd](./images/vofa_new_cmd.png)
 
-### 5.2 根据你的命令帧编辑命令
+### 7.2 根据你的命令帧编辑命令
 
 ![vofa-edit-cmd](./images/vofa_edit_cmd.png)
 
@@ -413,8 +330,26 @@ void float2uint8Array(uint8_t* u8Array, const float* fdata);
 
 ![vofa-save-with-hex](./images/vofa_save_with_hex.png)
 
-### 5.3 将命令绑定到控件
+### 7.3 将命令绑定到控件
 
 在控件上右键单击，选择`绑定命令`，选择我们刚刚保存的命令即可完成绑定
 
 ![vofa_bond_cmd](./images/vofa_bond_cmd.png)
+
+## 八、旧版本迁移说明
+
+如果你使用的是旧版本接口，请按以下对照修改：
+
+| 旧接口 | 新接口 |
+|--------|--------|
+| `vofaJustFloatInit()` | `vofaInit()` |
+| `vofaSendJustFloat(&JustFloat_Data)`（结构体方式） | `vofaSendJustFloat(fdata数组, 通道数)` |
+| `vofaCommandParse()` 返回 `void` | 返回 `vofaParseResult`，可判断解析是否成功 |
+| 修改 `./Src/vofa_uart.c` 移植串口发送 | 在自己的工程里定义 `uartSendData` / `uartSendByte` 覆盖弱符号 |
+| 修改 `./Src/vofa_function.c` 定制命令帧 | 在自己的工程里定义 `vofaCommandParse` 覆盖弱符号 |
+
+其他变化：
+
+- 全局变量 `JustFloat_Data`、结构体 `vofaJustFloatFrame`、`vofaRxBufferIndex` 已不再对外暴露；
+- `vofaCommand` 结构体中的 `validData` 成员已移除（解析结果直接写入 `floatData`）；
+- `vofaCommandData` 现在声明为 `volatile`。
